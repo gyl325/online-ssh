@@ -17,8 +17,12 @@ RUN GOPROXY="$GOPROXY" go mod download
 COPY backend-skeleton/server ./
 COPY --from=web-build /src/apps/web/dist ./web-dist
 RUN CGO_ENABLED=0 GOOS=linux GOPROXY="$GOPROXY" go build -o /out/online-ssh-server ./cmd/app
-RUN mkdir -p /runtime/tmp \
+RUN mkdir -p /runtime/tmp/online-ssh-transfers \
     && chmod 1777 /runtime/tmp \
+    && chown 65532:65532 /runtime/tmp/online-ssh-transfers \
+    && chmod 0700 /runtime/tmp/online-ssh-transfers \
+    && touch /runtime/tmp/online-ssh-transfers/.keep \
+    && chown 65532:65532 /runtime/tmp/online-ssh-transfers/.keep \
     && cp /etc/ssl/certs/ca-certificates.crt /runtime/ca-certificates.crt
 
 FROM ${RUNTIME_IMAGE}
