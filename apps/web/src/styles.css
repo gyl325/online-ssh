@@ -5912,6 +5912,65 @@ button {
   font-weight: 700;
 }
 
+.user-center-default-path-card {
+  gap: var(--ui-space-3);
+}
+
+.user-center-default-path-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 520px), 1fr));
+  gap: 1rem;
+}
+
+.user-center-default-path-group {
+  display: grid;
+  gap: 0.45rem;
+  min-width: 0;
+}
+
+.user-center-default-path-label {
+  color: var(--ui-muted);
+  font-size: 0.78rem;
+  font-weight: 700;
+}
+
+.user-center-default-path-control-row {
+  display: grid;
+  grid-template-columns: max-content minmax(220px, 1fr);
+  align-items: center;
+  gap: 0.75rem;
+  min-width: 0;
+}
+
+.user-center-default-path-mode-control {
+  justify-self: start;
+}
+
+.user-center-default-path-inline-input {
+  min-width: 0;
+}
+
+.user-center-default-path-inline-input-hidden {
+  visibility: hidden;
+  pointer-events: none;
+}
+
+.user-center-default-path-inline-input .ui-input {
+  width: 100%;
+  min-height: var(--ui-control-height-md);
+}
+
+@media (max-width: 760px) {
+  .user-center-default-path-grid,
+  .user-center-default-path-control-row {
+    grid-template-columns: 1fr;
+  }
+
+  .user-center-default-path-inline-input-hidden {
+    display: none;
+  }
+}
+
 .user-center-number-control {
   display: inline-flex;
   width: min(100%, 180px);

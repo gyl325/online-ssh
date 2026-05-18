@@ -12,6 +12,7 @@ const labels: Record<string, string> = {
   "files.forward": "Forward",
   "files.go": "Go",
   "files.goRoot": "Go to root",
+  "files.hideHiddenFiles": "Hide hidden files",
   "files.listSummary": "{{count}} entries",
   "files.listTitle": "Files",
   "files.loadingDirectory": "Loading directory...",
@@ -19,6 +20,7 @@ const labels: Record<string, string> = {
   "files.refreshDirectory": "Refresh",
   "files.remoteSearchTitle": "Remote search",
   "files.searchPlaceholder": "Search current directory",
+  "files.showHiddenFiles": "Show hidden files",
   "files.uploadEntry": "Upload",
   "files.viewGrid": "Grid view",
   "files.viewList": "List view",
@@ -55,12 +57,14 @@ function renderToolbar(overrides?: Partial<Parameters<typeof FileBrowserToolbar>
     onRefresh: vi.fn(),
     onRemoteSearch: vi.fn(),
     onSearchKeywordChange: vi.fn(),
+    onShowHiddenChange: vi.fn(),
     onSubmitPathEdit: vi.fn(),
     onUpload: vi.fn(),
     onViewModeChange: vi.fn<(mode: FileBrowserViewMode) => void>(),
     pathDraft: "/root/logs",
     pathEditing: false,
     searchKeyword: "log",
+    showHidden: true,
     t,
     viewMode: "list" as FileBrowserViewMode,
     ...overrides
@@ -101,6 +105,7 @@ describe("FileBrowserToolbar", () => {
     await user.click(screen.getByRole("button", { name: "Parent directory" }));
     await user.click(screen.getByRole("button", { name: "Refresh" }));
     await user.click(screen.getByRole("button", { name: "Remote search" }));
+    await user.click(screen.getByRole("button", { name: "Hide hidden files" }));
     await user.click(screen.getByRole("button", { name: "New directory" }));
     await user.click(screen.getByRole("button", { name: "New file" }));
     await user.click(screen.getByRole("button", { name: "Upload" }));
@@ -116,10 +121,23 @@ describe("FileBrowserToolbar", () => {
     expect(props.onParent).toHaveBeenCalledTimes(1);
     expect(props.onRefresh).toHaveBeenCalledTimes(1);
     expect(props.onRemoteSearch).toHaveBeenCalledTimes(1);
+    expect(props.onShowHiddenChange).toHaveBeenCalledWith(false);
     expect(props.onCreateDirectory).toHaveBeenCalledTimes(1);
     expect(props.onCreateFile).toHaveBeenCalledTimes(1);
     expect(props.onUpload).toHaveBeenCalledTimes(1);
     expect(props.onViewModeChange).toHaveBeenCalledWith("grid");
+  });
+
+  it("shows the hidden-file toggle as a pressed toolbar tool", async () => {
+    const user = userEvent.setup();
+    const props = renderToolbar({ showHidden: false });
+
+    const toggle = screen.getByRole("button", { name: "Show hidden files" });
+    expect(toggle).toHaveAttribute("aria-pressed", "false");
+
+    await user.click(toggle);
+
+    expect(props.onShowHiddenChange).toHaveBeenCalledWith(true);
   });
 
   it("forwards breadcrumb navigation and blank breadcrumb edit requests", async () => {

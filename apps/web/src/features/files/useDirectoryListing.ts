@@ -14,6 +14,7 @@ import {
 type DirectoryLoadOptions = {
   historyMode?: FileHistoryMode;
   preserveOnError?: boolean;
+  silentError?: boolean | ((error: unknown) => boolean);
 };
 
 type UseDirectoryListingOptions = {
@@ -58,7 +59,7 @@ export function useDirectoryListing({
       setDirectoryErrorMessage(next.directoryErrorMessage);
       setDirectoryState(next.directoryState);
       setSelectedEntry(next.selectedEntry);
-      return;
+      return { ok: false as const };
     }
 
     const loadingContext = nextFileDirectoryLoadingState(currentContext, hostId);
@@ -78,12 +79,17 @@ export function useDirectoryListing({
       );
       setDirectoryErrorMessage(null);
       setDirectoryState("ready");
+      return { ok: true as const };
     } catch (error) {
       const next = nextFileDirectoryErrorState(currentContext, Boolean(options?.preserveOnError));
-      const errorMessage = onLoadError(error) || null;
+      const silentError = typeof options?.silentError === "function"
+        ? options.silentError(error)
+        : Boolean(options?.silentError);
+      const errorMessage = silentError ? null : onLoadError(error) || null;
       setDirectory(next.directory);
       setDirectoryErrorMessage(errorMessage);
       setDirectoryState(next.directoryState);
+      return { ok: false as const, error };
     }
   };
 

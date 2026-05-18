@@ -10,7 +10,7 @@ import {
   useRef,
   useState
 } from "react";
-import { Check, Copy, KeyRound, Mail, Palette, Pencil, Plus, Shield, Trash2, UserRound } from "lucide-react";
+import { Check, Copy, FolderOpen, KeyRound, Mail, Palette, Pencil, Plus, Shield, Trash2, UserRound } from "lucide-react";
 
 import {
   changeAccountEmail,
@@ -26,7 +26,7 @@ import {
 import type { MfaStatusResponse, SetupMfaResponse } from "../features/account/types";
 import { getApiErrorMessage } from "../features/auth/api";
 import { useAuth } from "../features/auth/AuthContext";
-import { usePreferences, type AppLanguage, type AppTheme } from "../features/preferences/PreferencesContext";
+import { usePreferences, type AppLanguage, type AppTheme, type DefaultRemotePathPreference } from "../features/preferences/PreferencesContext";
 import {
   buildTerminalHighlightRules,
   builtinTerminalHighlightRules,
@@ -296,6 +296,10 @@ export function UserCenterPage() {
     theme,
     setTheme,
     effectiveTheme,
+    filesDefaultPathPreference,
+    setFilesDefaultPathPreference,
+    terminalDefaultPathPreference,
+    setTerminalDefaultPathPreference,
     terminalFontSize,
     setTerminalFontSize,
     terminalHighlightPreferences,
@@ -405,6 +409,11 @@ export function UserCenterPage() {
   const mfaVerificationMethodItems: Array<{ label: string; value: MfaVerificationMethod }> = [
     { label: t("profile.mfa.methodTotp"), value: "totp" },
     { label: t("profile.mfa.methodRecoveryCode"), value: "recovery_code" }
+  ];
+  const defaultPathModeItems: Array<{ label: string; value: DefaultRemotePathPreference["mode"] }> = [
+    { label: t("profile.account.defaultPathHome"), value: "home" },
+    { label: t("profile.account.defaultPathRoot"), value: "root" },
+    { label: t("profile.account.defaultPathCustom"), value: "custom" }
   ];
   const accountSummary = useMemo(() => [
     { label: t("profile.account.displayName"), value: user?.display_name || "--" },
@@ -778,6 +787,51 @@ export function UserCenterPage() {
     }
   };
 
+  const renderDefaultPathPreference = ({
+    customLabel,
+    label,
+    onChange,
+    preference
+  }: {
+    customLabel: string;
+    label: string;
+    onChange: (preference: DefaultRemotePathPreference) => void;
+    preference: DefaultRemotePathPreference;
+  }) => {
+    const customActive = preference.mode === "custom";
+    return (
+      <div className="user-center-default-path-group">
+        <span className="user-center-default-path-label">{label}</span>
+        <div className="user-center-default-path-control-row">
+          <SegmentedControl
+            ariaLabel={label}
+            className="user-center-default-path-mode-control user-center-default-path-group-inline"
+            items={defaultPathModeItems}
+            onChange={(mode) => onChange({ ...preference, mode })}
+            value={preference.mode}
+          />
+          <div
+            aria-hidden={customActive ? undefined : "true"}
+            className={[
+              "user-center-default-path-inline-input",
+              customActive ? "" : "user-center-default-path-inline-input-hidden"
+            ].filter(Boolean).join(" ")}
+          >
+            <TextInput
+              aria-label={customLabel}
+              autoComplete="off"
+              disabled={!customActive}
+              onChange={(event) => onChange({ mode: "custom", customPath: event.target.value })}
+              placeholder="/srv/app"
+              tabIndex={customActive ? undefined : -1}
+              value={customActive ? preference.customPath : ""}
+            />
+          </div>
+        </div>
+      </div>
+    );
+  };
+
   const renderAccount = () => (
     <section className="user-center-section">
       <article className="user-center-card">
@@ -797,6 +851,30 @@ export function UserCenterPage() {
           ))}
         </dl>
       </article>
+
+      <section aria-label={t("profile.account.defaultPathTitle")} className="user-center-card user-center-default-path-card">
+        <div className="user-center-card-heading">
+          <span className="user-center-card-icon"><FolderOpen aria-hidden="true" /></span>
+          <div>
+            <h2>{t("profile.account.defaultPathTitle")}</h2>
+            <p>{t("profile.account.defaultPathCopy")}</p>
+          </div>
+        </div>
+        <div className="user-center-default-path-grid">
+          {renderDefaultPathPreference({
+            customLabel: t("profile.account.fileCustomPath"),
+            label: t("profile.account.filesDefaultPath"),
+            onChange: setFilesDefaultPathPreference,
+            preference: filesDefaultPathPreference
+          })}
+          {renderDefaultPathPreference({
+            customLabel: t("profile.account.terminalCustomPath"),
+            label: t("profile.account.terminalDefaultPath"),
+            onChange: setTerminalDefaultPathPreference,
+            preference: terminalDefaultPathPreference
+          })}
+        </div>
+      </section>
 
       <article className="user-center-card">
         <div className="user-center-card-heading">

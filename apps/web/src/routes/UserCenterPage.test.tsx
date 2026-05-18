@@ -131,6 +131,55 @@ describe("UserCenterPage", () => {
     expect(screen.getByText("邮箱验证码")).toBeInTheDocument();
   });
 
+  it("updates default file and terminal entry paths from the account tab", async () => {
+    const user = userEvent.setup();
+    renderPage();
+
+    const defaultPathSection = screen.getByRole("region", { name: "默认进入路径" });
+    const filePathGroup = within(defaultPathSection).getByRole("group", { name: "文件默认进入路径" });
+    const terminalPathGroup = within(defaultPathSection).getByRole("group", { name: "终端默认进入路径" });
+    const fileCustomInputSlot = within(defaultPathSection)
+      .getByLabelText("文件自定义路径")
+      .closest(".user-center-default-path-inline-input");
+    const terminalCustomInputSlot = within(defaultPathSection)
+      .getByLabelText("终端自定义路径")
+      .closest(".user-center-default-path-inline-input");
+
+    expect(fileCustomInputSlot).toHaveClass("user-center-default-path-inline-input-hidden");
+    expect(terminalCustomInputSlot).toHaveClass("user-center-default-path-inline-input-hidden");
+    await user.click(within(terminalPathGroup).getByRole("button", { name: "自定义路径" }));
+    expect(fileCustomInputSlot).toHaveClass("user-center-default-path-inline-input-hidden");
+    expect(terminalCustomInputSlot).not.toHaveClass("user-center-default-path-inline-input-hidden");
+    expect(terminalPathGroup).toHaveClass("user-center-default-path-group-inline");
+    await user.click(within(filePathGroup).getByRole("button", { name: "自定义路径" }));
+    const fileCustomInput = within(defaultPathSection).getByLabelText("文件自定义路径");
+    expect(fileCustomInput.closest(".user-center-default-path-inline-input")).not.toBeNull();
+    expect(fileCustomInput.closest(".user-center-default-path-control-row")).not.toBeNull();
+    expect(filePathGroup).toHaveClass("user-center-default-path-group-inline");
+    fireEvent.change(within(defaultPathSection).getByLabelText("文件自定义路径"), {
+      target: { value: "srv/app/" }
+    });
+    await user.click(within(terminalPathGroup).getByRole("button", { name: "根目录" }));
+
+    expect(JSON.parse(window.localStorage.getItem("online-ssh-files-default-path") || "{}")).toEqual({
+      mode: "custom",
+      customPath: "/srv/app"
+    });
+    expect(JSON.parse(window.localStorage.getItem("online-ssh-terminal-default-path") || "{}")).toEqual({
+      mode: "root",
+      customPath: ""
+    });
+    expect(stylesCss).toMatch(
+      /\.user-center-default-path-grid\s*\{[^}]*grid-template-columns:\s*repeat\(auto-fit,\s*minmax\(min\(100%,\s*520px\),\s*1fr\)\);/s
+    );
+    expect(stylesCss).toMatch(
+      /\.user-center-default-path-control-row\s*\{[^}]*grid-template-columns:\s*max-content minmax\(220px,\s*1fr\);/s
+    );
+    expect(stylesCss).toMatch(
+      /\.user-center-default-path-inline-input-hidden\s*\{[^}]*visibility:\s*hidden;[^}]*pointer-events:\s*none;/s
+    );
+  });
+
   it("keeps invalid account and session dates visible", () => {
     authState.user.created_at = "not-a-date";
     authState.session.last_seen_at = "still-not-a-date";

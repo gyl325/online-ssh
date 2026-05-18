@@ -51,7 +51,7 @@ func (r *Runtime) Close() error {
 	return firstErr
 }
 
-func newRuntime(client *ssh.Client, rows, cols int, initialDirectory string) (*Runtime, error) {
+func newRuntime(client *ssh.Client, rows, cols int, initialDirectories []string) (*Runtime, error) {
 	sshSession, err := client.NewSession()
 	if err != nil {
 		return nil, err
@@ -89,7 +89,7 @@ func newRuntime(client *ssh.Client, rows, cols int, initialDirectory string) (*R
 		_ = sshSession.Close()
 		return nil, err
 	}
-	if command := initialDirectoryCommand(initialDirectory); command != "" {
+	if command := initialDirectoryCommand(initialDirectories); command != "" {
 		if _, err := stdin.Write([]byte(command)); err != nil {
 			_ = stdin.Close()
 			_ = sshSession.Close()
@@ -106,22 +106,45 @@ func newRuntime(client *ssh.Client, rows, cols int, initialDirectory string) (*R
 	}, nil
 }
 
-func normalizeInitialDirectory(value string) (string, error) {
-	if value == "" {
-		return "", nil
+func normalizeInitialDirectories(values []string) ([]string, error) {
+	normalized := make([]string, 0, len(values))
+	seen := make(map[string]struct{}, len(values))
+	for _, value := range values {
+		value = strings.TrimSpace(value)
+		if value == "" {
+			continue
+		}
+		if len(value) > maxInitialDirectoryLength || strings.ContainsAny(value, "\x00\r\n") {
+			return nil, ErrInvalidInput
+		}
+		if _, exists := seen[value]; exists {
+			continue
+		}
+		seen[value] = struct{}{}
+		normalized = append(normalized, value)
 	}
-	if len(value) > maxInitialDirectoryLength || strings.ContainsAny(value, "\x00\r\n") {
-		return "", ErrInvalidInput
-	}
-	return value, nil
+	return normalized, nil
 }
 
-func initialDirectoryCommand(value string) string {
-	value, err := normalizeInitialDirectory(value)
-	if err != nil || value == "" {
+func initialDirectoryCommand(values []string) string {
+	values, err := normalizeInitialDirectories(values)
+	if err != nil || len(values) == 0 {
 		return ""
 	}
-	return "cd -- " + shellSingleQuote(value) + "\n"
+	var builder strings.Builder
+	for index, value := range values {
+		quoted := shellSingleQuote(value)
+		if index == 0 {
+			builder.WriteString("if [ -d ")
+		} else {
+			builder.WriteString("; elif [ -d ")
+		}
+		builder.WriteString(quoted)
+		builder.WriteString(" ]; then cd -- ")
+		builder.WriteString(quoted)
+	}
+	builder.WriteString("; fi\n")
+	return builder.String()
 }
 
 func shellSingleQuote(value string) string {

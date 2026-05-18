@@ -1773,15 +1773,23 @@ func TestWriteTerminalErrorIncludesConnectionLog(t *testing.T) {
 }
 
 func TestInitialDirectoryCommandQuotesRemotePath(t *testing.T) {
-	command := initialDirectoryCommand("/srv/app's current")
-	want := "cd -- '/srv/app'\\''s current'\n"
+	command := initialDirectoryCommand([]string{"/srv/app's current"})
+	want := "if [ -d '/srv/app'\\''s current' ]; then cd -- '/srv/app'\\''s current'; fi\n"
+	if command != want {
+		t.Fatalf("unexpected command %q, want %q", command, want)
+	}
+}
+
+func TestInitialDirectoryCommandFallsBackAcrossCandidatePaths(t *testing.T) {
+	command := initialDirectoryCommand([]string{"/srv/missing", "/home/deploy", "/"})
+	want := "if [ -d '/srv/missing' ]; then cd -- '/srv/missing'; elif [ -d '/home/deploy' ]; then cd -- '/home/deploy'; elif [ -d '/' ]; then cd -- '/'; fi\n"
 	if command != want {
 		t.Fatalf("unexpected command %q, want %q", command, want)
 	}
 }
 
 func TestNormalizeInitialDirectoryRejectsUnsafePath(t *testing.T) {
-	if _, err := normalizeInitialDirectory("/tmp\nwhoami"); !errors.Is(err, ErrInvalidInput) {
+	if _, err := normalizeInitialDirectories([]string{"/tmp\nwhoami"}); !errors.Is(err, ErrInvalidInput) {
 		t.Fatalf("expected ErrInvalidInput for newline path, got %v", err)
 	}
 }

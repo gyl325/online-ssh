@@ -15,6 +15,7 @@ import * as hostApi from "../features/hosts/api";
 import * as transferApi from "../features/transfers/api";
 import * as transferClient from "../features/transfers/client";
 import * as downloadLib from "../shared/lib/download";
+import { HttpError } from "../shared/api/http";
 
 vi.mock("../features/hosts/api", () => ({
   listHosts: vi.fn()
@@ -806,6 +807,84 @@ describe("FilesPage", () => {
 
     await user.click(screen.getByRole("button", { name: "Size" }));
     expect(rowNames()).toEqual(["logs", "alpha.txt", "zeta.log"]);
+  });
+
+  it("toggles hidden file visibility from the file toolbar", async () => {
+    listDirectoryMock.mockResolvedValue({
+      kind: "success",
+      data: {
+        ...directoryResponse,
+        items: [
+          buildFileEntry({
+            name: "notes.txt",
+            path: "/root/notes.txt",
+            is_hidden: false
+          }),
+          buildFileEntry({
+            name: ".env",
+            path: "/root/.env",
+            is_hidden: true
+          })
+        ]
+      }
+    });
+
+    const user = userEvent.setup();
+    renderWithPageProviders(<FilesPage />);
+
+    await connectFileHost(user);
+    expect(await screen.findByText("notes.txt")).toBeInTheDocument();
+    expect(screen.getByText(".env")).toBeInTheDocument();
+
+    const hideHidden = screen.getByRole("button", { name: "Hide hidden files" });
+    expect(hideHidden).toHaveAttribute("aria-pressed", "true");
+    await user.click(hideHidden);
+
+    expect(screen.getByText("notes.txt")).toBeInTheDocument();
+    expect(screen.queryByText(".env")).not.toBeInTheDocument();
+
+    const showHidden = screen.getByRole("button", { name: "Show hidden files" });
+    expect(showHidden).toHaveAttribute("aria-pressed", "false");
+    await user.click(showHidden);
+
+    expect(screen.getByText(".env")).toBeInTheDocument();
+  });
+
+  it("falls back from a missing custom default file path to the host home path", async () => {
+    window.localStorage.setItem(
+      "online-ssh-files-default-path",
+      JSON.stringify({ mode: "custom", customPath: "/srv/missing" })
+    );
+    listDirectoryMock.mockImplementation(async (input) => {
+      if (input.path === "/srv/missing") {
+        throw new HttpError(404, { code: "NOT_FOUND", message: "file resource not found" });
+      }
+      return {
+        kind: "success",
+        data: directoryResponse
+      };
+    });
+
+    const user = userEvent.setup();
+    renderWithPageProviders(<FilesPage />);
+
+    await connectFileHost(user);
+
+    await waitFor(() =>
+      expect(listDirectoryMock).toHaveBeenNthCalledWith(1, {
+        host_id: "host-1",
+        path: "/srv/missing",
+        limit: 200
+      })
+    );
+    await waitFor(() =>
+      expect(listDirectoryMock).toHaveBeenNthCalledWith(2, {
+        host_id: "host-1",
+        path: "/root",
+        limit: 200
+      })
+    );
+    expect(await screen.findByText("notes.txt")).toBeInTheDocument();
   });
 
   it("switches to grid view and opens a directory tile", async () => {

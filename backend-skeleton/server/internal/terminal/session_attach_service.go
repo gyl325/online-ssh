@@ -10,7 +10,7 @@ import (
 	"github.com/example/online-ssh-platform/server/internal/model"
 )
 
-func (s *Service) AttachRuntime(ctx context.Context, userID, authSessionID, sessionID string, rows, cols int, initialDirectory string) (*TerminalAttachment, error) {
+func (s *Service) AttachRuntime(ctx context.Context, userID, authSessionID, sessionID string, rows, cols int, initialDirectories []string) (*TerminalAttachment, error) {
 	if strings.TrimSpace(userID) == "" || strings.TrimSpace(sessionID) == "" {
 		return nil, ErrInvalidInput
 	}
@@ -30,7 +30,7 @@ func (s *Service) AttachRuntime(ctx context.Context, userID, authSessionID, sess
 	} else if !errors.Is(err, ErrRuntimeNotFound) {
 		return nil, err
 	}
-	initialDirectory, err = normalizeInitialDirectory(initialDirectory)
+	initialDirectories, err = normalizeInitialDirectories(initialDirectories)
 	if err != nil {
 		return nil, err
 	}
@@ -53,7 +53,7 @@ func (s *Service) AttachRuntime(ctx context.Context, userID, authSessionID, sess
 		return nil, err
 	}
 
-	runtime, err := newRuntime(client, rows, cols, initialDirectory)
+	runtime, err := newRuntime(client, rows, cols, initialDirectories)
 	if err != nil {
 		_ = client.Close()
 		_ = s.failSession(context.Background(), userID, session.ID, session.HostID, isTemporary, err.Error())

@@ -27,14 +27,15 @@ func (h *Handler) Stream(w http.ResponseWriter, r *http.Request) {
 		webutil.WriteError(w, http.StatusUnauthorized, "UNAUTHORIZED", "terminal attach token required")
 		return
 	}
-	initialDirectory := r.URL.Query().Get("cwd")
+	query := r.URL.Query()
+	initialDirectories := append([]string{query.Get("cwd")}, query["cwd_fallback"]...)
 	rows, cols, err := terminalSizeFromQuery(r)
 	if err != nil {
 		webutil.WriteError(w, http.StatusBadRequest, "BAD_REQUEST", "invalid terminal size")
 		return
 	}
 
-	attachment, err := h.service.AttachRuntime(r.Context(), session.UserID, session.SessionID, sessionID, rows, cols, initialDirectory)
+	attachment, err := h.service.AttachRuntime(r.Context(), session.UserID, session.SessionID, sessionID, rows, cols, initialDirectories)
 	if err != nil {
 		h.writeTerminalError(w, err)
 		return

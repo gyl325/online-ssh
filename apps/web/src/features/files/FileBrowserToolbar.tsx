@@ -1,6 +1,8 @@
 import {
   ChevronLeft,
   ChevronRight,
+  Eye,
+  EyeOff,
   FilePlus,
   FolderPlus,
   Home,
@@ -37,12 +39,14 @@ type FileBrowserToolbarProps = {
   onRefresh: () => void;
   onRemoteSearch: () => void;
   onSearchKeywordChange: (value: string) => void;
+  onShowHiddenChange: (showHidden: boolean) => void;
   onSubmitPathEdit: () => void;
   onUpload: () => void;
   onViewModeChange: (mode: FileBrowserViewMode) => void;
   pathDraft: string;
   pathEditing: boolean;
   searchKeyword: string;
+  showHidden: boolean;
   t: (key: string, values?: Record<string, string | number>) => string;
   viewMode: FileBrowserViewMode;
 };
@@ -68,12 +72,14 @@ export function FileBrowserToolbar({
   onRefresh,
   onRemoteSearch,
   onSearchKeywordChange,
+  onShowHiddenChange,
   onSubmitPathEdit,
   onUpload,
   onViewModeChange,
   pathDraft,
   pathEditing,
   searchKeyword,
+  showHidden,
   t,
   viewMode
 }: FileBrowserToolbarProps) {
@@ -169,6 +175,16 @@ export function FileBrowserToolbar({
             </IconButton>
             <IconButton className="files-icon-button" disabled={!canUseCurrentHost} label={t("files.remoteSearchTitle")} onClick={onRemoteSearch} variant="ghost">
               <Search aria-hidden="true" />
+            </IconButton>
+            <IconButton
+              aria-pressed={showHidden}
+              className="files-icon-button"
+              disabled={!canUseCurrentHost}
+              label={showHidden ? t("files.hideHiddenFiles") : t("files.showHiddenFiles")}
+              onClick={() => onShowHiddenChange(!showHidden)}
+              variant="ghost"
+            >
+              {showHidden ? <EyeOff aria-hidden="true" /> : <Eye aria-hidden="true" />}
             </IconButton>
             <IconButton
               className="files-icon-button"

@@ -1247,6 +1247,28 @@ describe("TerminalPage", () => {
     expect(new URL(websocketUrl).searchParams.get("cwd")).toBe("/var/www/app");
   });
 
+  it("passes default terminal path fallback candidates to the websocket", async () => {
+    window.localStorage.setItem(
+      "online-ssh-terminal-default-path",
+      JSON.stringify({ mode: "custom", customPath: "/srv/app" })
+    );
+    listTerminalSessionsMock.mockImplementation(
+      () =>
+        new Promise(() => {
+          // Keep the restore effect pending so it does not overwrite the tab opened from the query entrypoint.
+        })
+    );
+    createTerminalSessionMock.mockResolvedValue({ kind: "success", data: createResponse });
+
+    renderWithPageProviders(<TerminalPage />, { route: "/terminal?host_id=host-1" });
+
+    expect(await screen.findByTestId("terminal-pane-session")).toHaveTextContent("session-1");
+    const websocketUrl = screen.getByTestId("terminal-pane-websocket").textContent || "";
+    const params = new URL(websocketUrl).searchParams;
+    expect(params.get("cwd")).toBe("/srv/app");
+    expect(params.getAll("cwd_fallback")).toEqual(["/root", "/"]);
+  });
+
   it("passes the terminal attach token to the websocket URL", async () => {
     listTerminalSessionsMock.mockImplementation(
       () =>

@@ -20,20 +20,25 @@ import {
 import {
   applyThemeToDocument,
   persistLanguage,
+  persistFilesDefaultPathPreference,
   persistTerminalFontSize,
   persistTerminalHighlightPreferences,
+  persistTerminalDefaultPathPreference,
   persistTerminalTheme,
+  readStoredFilesDefaultPathPreference,
   readStoredLanguage,
   readStoredTerminalFontSize,
   readStoredTerminalHighlightPreferences,
+  readStoredTerminalDefaultPathPreference,
   readStoredTerminalTheme,
   readStoredTheme,
   type AppTheme,
+  type DefaultRemotePathPreference,
   type EffectiveAppTheme
 } from "./preferencesStorage";
 
 export type { AppLanguage } from "./i18n/translations";
-export type { AppTheme, EffectiveAppTheme } from "./preferencesStorage";
+export type { AppTheme, DefaultRemotePathPreference, EffectiveAppTheme } from "./preferencesStorage";
 
 const PreferencesContext = createContext<PreferencesContextValue | null>(null);
 
@@ -48,6 +53,12 @@ function resolveEffectiveTheme(theme: AppTheme, systemTheme: EffectiveAppTheme):
 export function PreferencesProvider({ children }: PropsWithChildren) {
   const [language, setLanguageState] = useState<AppLanguage>(readStoredLanguage);
   const [theme, setThemeState] = useState<AppTheme>(readStoredTheme);
+  const [filesDefaultPathPreference, setFilesDefaultPathPreferenceState] = useState<DefaultRemotePathPreference>(
+    readStoredFilesDefaultPathPreference
+  );
+  const [terminalDefaultPathPreference, setTerminalDefaultPathPreferenceState] = useState<DefaultRemotePathPreference>(
+    readStoredTerminalDefaultPathPreference
+  );
   const [terminalFontSize, setTerminalFontSizeState] = useState(readStoredTerminalFontSize);
   const [terminalTheme, setTerminalThemeState] = useState<TerminalThemePreference>(readStoredTerminalTheme);
   const [terminalHighlightPreferences, setTerminalHighlightPreferencesState] = useState<TerminalHighlightPreferences>(
@@ -73,6 +84,14 @@ export function PreferencesProvider({ children }: PropsWithChildren) {
     applyThemeToDocument(nextTheme, resolveEffectiveTheme(nextTheme, systemTheme));
     setThemeState(nextTheme);
   }, [systemTheme]);
+
+  const setFilesDefaultPathPreference = useCallback((nextPreference: DefaultRemotePathPreference) => {
+    setFilesDefaultPathPreferenceState(persistFilesDefaultPathPreference(nextPreference));
+  }, []);
+
+  const setTerminalDefaultPathPreference = useCallback((nextPreference: DefaultRemotePathPreference) => {
+    setTerminalDefaultPathPreferenceState(persistTerminalDefaultPathPreference(nextPreference));
+  }, []);
 
   const setTerminalFontSize = useCallback((nextFontSize: number) => {
     setTerminalFontSizeState(persistTerminalFontSize(nextFontSize));
@@ -118,6 +137,10 @@ export function PreferencesProvider({ children }: PropsWithChildren) {
       theme,
       effectiveTheme,
       setTheme,
+      filesDefaultPathPreference,
+      setFilesDefaultPathPreference,
+      terminalDefaultPathPreference,
+      setTerminalDefaultPathPreference,
       terminalFontSize,
       setTerminalFontSize,
       terminalTheme,
@@ -127,11 +150,15 @@ export function PreferencesProvider({ children }: PropsWithChildren) {
     });
   }, [
     effectiveTheme,
+    filesDefaultPathPreference,
     language,
+    setFilesDefaultPathPreference,
     setTerminalFontSize,
+    setTerminalDefaultPathPreference,
     setTerminalHighlightPreferences,
     setTerminalTheme,
     setTheme,
+    terminalDefaultPathPreference,
     terminalFontSize,
     terminalHighlightPreferences,
     terminalTheme,

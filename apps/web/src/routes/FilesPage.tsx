@@ -64,7 +64,6 @@ import {
 } from "../features/files/fileShortcuts";
 import {
   type FileHostContext,
-  createHomeFileHostContext,
   createIdleFileHostContext,
   removeFileHostContext,
   shouldLoadFileHostContextDirectory,
@@ -94,6 +93,7 @@ import {
 } from "../features/files/fileViewModel";
 import { listHosts } from "../features/hosts/api";
 import type { Host } from "../features/hosts/types";
+import { defaultRemotePathCandidates } from "../features/preferences/defaultRemotePath";
 import {
   downloadTransferTaskContent,
   initUploadTask,
@@ -105,6 +105,7 @@ import { hostMatchesSearch } from "../features/hosts/display";
 import { usePreferences } from "../features/preferences/PreferencesContext";
 import { useToast } from "../features/ui/ToastContext";
 import { useWorkspaceSnapshot } from "../features/workspace/WorkspaceContext";
+import { isHttpError } from "../shared/api/http";
 import { copyTextToClipboard } from "../shared/lib/clipboard";
 import { formatDateTime } from "../shared/lib/date";
 import { saveBlobAsFile } from "../shared/lib/download";
@@ -166,12 +167,16 @@ function readTemporaryFileHost(hostId: string): Host | null {
   }
 }
 
+function shouldFallbackDefaultPath(error: unknown) {
+  return isHttpError(error) && (error.status === 404 || error.code === "NOT_FOUND");
+}
+
 export function FilesPage({ hostCatalog, visible = true }: FilesPageProps = {}) {
   const confirmDialog = useConfirmDialog();
   const fingerprintDialog = useFingerprintDialog();
   const workspace = useWorkspaceSnapshot();
   const toast = useToast();
-  const { language, t } = usePreferences();
+  const { filesDefaultPathPreference, language, t } = usePreferences();
   const navigate = useNavigate();
   const location = useLocation();
   const [searchParams, setSearchParams] = useSearchParams();
@@ -205,6 +210,7 @@ export function FilesPage({ hostCatalog, visible = true }: FilesPageProps = {}) 
   const [hostPickerFilter, setHostPickerFilter] = useState("");
   const [fileViewMode, setFileViewMode] = useState<FileViewMode>("list");
   const [fileSorting, setFileSorting] = useState<SortingState>([{ id: "name", desc: false }]);
+  const [showHiddenFiles, setShowHiddenFiles] = useState(true);
   const [searchKeyword, setSearchKeyword] = useState(() => initialSearchKeyword);
   const [pathEditing, setPathEditing] = useState(false);
   const [pathDraft, setPathDraft] = useState("/");
@@ -366,8 +372,30 @@ export function FilesPage({ hostCatalog, visible = true }: FilesPageProps = {}) 
   resetRemoteSearchMessagesRef.current = remoteSearch.resetMessages;
   const remoteSearchScopePath = remoteSearch.task?.base_path || currentPath;
 
+  const createDefaultFileHostContext = (host: Host) => {
+    const candidates = defaultRemotePathCandidates(filesDefaultPathPreference, defaultHomePath(host));
+    return createIdleFileHostContext({ currentPath: candidates[0] || "/" });
+  };
+
+  const loadDefaultDirectory = async (host: Host, hostId = host.id) => {
+    const candidates = defaultRemotePathCandidates(filesDefaultPathPreference, defaultHomePath(host));
+    for (const [index, candidate] of candidates.entries()) {
+      const result = await loadDirectory(candidate, hostId, {
+        historyMode: "replace",
+        silentError: (error) => index < candidates.length - 1 && shouldFallbackDefaultPath(error)
+      });
+      if (result.ok) {
+        return true;
+      }
+      if (!shouldFallbackDefaultPath(result.error)) {
+        return false;
+      }
+    }
+    return false;
+  };
+
   const visibleItems = useMemo(() => {
-    const items = directory?.items || [];
+    const items = (directory?.items || []).filter((item) => showHiddenFiles || !item.is_hidden);
     if (!deferredSearchKeyword) {
       return items;
     }
@@ -377,7 +405,7 @@ export function FilesPage({ hostCatalog, visible = true }: FilesPageProps = {}) 
       const path = item.path.toLowerCase();
       return name.includes(deferredSearchKeyword) || path.includes(deferredSearchKeyword);
     });
-  }, [deferredSearchKeyword, directory]);
+  }, [deferredSearchKeyword, directory, showHiddenFiles]);
 
   const sortedVisibleItems = useMemo(
     () => sortFileEntries(visibleItems, fileSorting),
@@ -465,11 +493,14 @@ export function FilesPage({ hostCatalog, visible = true }: FilesPageProps = {}) 
     setConnectedHostIds((current) => (current.includes(hostId) ? current : [...current, hostId]));
     setSelectedHostId(hostId);
 
-    const context = fileHostContexts[hostId] || createHomeFileHostContext(host);
+    const hasSavedContext = Boolean(fileHostContexts[hostId]);
+    const context = fileHostContexts[hostId] || createDefaultFileHostContext(host);
     restoreFileHostContext(context);
 
     if (shouldLoadFileHostContextDirectory(context)) {
-      void loadDirectory(context.currentPath, hostId, { historyMode: "replace" });
+      void (hasSavedContext
+        ? loadDirectory(context.currentPath, hostId, { historyMode: "replace" })
+        : loadDefaultDirectory(host, hostId));
     }
   };
 
@@ -529,11 +560,14 @@ export function FilesPage({ hostCatalog, visible = true }: FilesPageProps = {}) 
     }
 
     setSelectedHostId(nextHostId);
-    const context = fileHostContexts[nextHostId] || createHomeFileHostContext(nextHost);
+    const hasSavedContext = Boolean(fileHostContexts[nextHostId]);
+    const context = fileHostContexts[nextHostId] || createDefaultFileHostContext(nextHost);
     restoreFileHostContext(context);
 
     if (shouldLoadFileHostContextDirectory(context)) {
-      void loadDirectory(context.currentPath, nextHostId, { historyMode: "replace" });
+      void (hasSavedContext
+        ? loadDirectory(context.currentPath, nextHostId, { historyMode: "replace" })
+        : loadDefaultDirectory(nextHost, nextHostId));
     }
   };
 
@@ -1924,12 +1958,14 @@ export function FilesPage({ hostCatalog, visible = true }: FilesPageProps = {}) 
             onRefresh={() => void refreshCurrentDirectory()}
             onRemoteSearch={() => remoteSearch.setOpen(true)}
             onSearchKeywordChange={setSearchKeyword}
+            onShowHiddenChange={setShowHiddenFiles}
             onSubmitPathEdit={() => void submitPathEdit()}
             onUpload={handleUploadEntry}
             onViewModeChange={setFileViewMode}
             pathDraft={pathDraft}
             pathEditing={pathEditing}
             searchKeyword={searchKeyword}
+            showHidden={showHiddenFiles}
             t={t}
             viewMode={fileViewMode}
           />

@@ -52,10 +52,14 @@ function installMatchMedia(initialDark: boolean) {
 function ThemeProbe() {
   const {
     effectiveTheme,
+    filesDefaultPathPreference,
+    setFilesDefaultPathPreference,
     setTerminalFontSize,
+    setTerminalDefaultPathPreference,
     setTerminalHighlightPreferences,
     setTerminalTheme,
     setTheme,
+    terminalDefaultPathPreference,
     terminalFontSize,
     terminalHighlightPreferences,
     terminalTheme,
@@ -67,12 +71,16 @@ function ThemeProbe() {
       <span data-testid="effective-theme">{effectiveTheme}</span>
       <span data-testid="terminal-font-size">{terminalFontSize}</span>
       <span data-testid="terminal-theme">{terminalTheme}</span>
+      <span data-testid="files-default-path">{`${filesDefaultPathPreference.mode}:${filesDefaultPathPreference.customPath}`}</span>
+      <span data-testid="terminal-default-path">{`${terminalDefaultPathPreference.mode}:${terminalDefaultPathPreference.customPath}`}</span>
       <span data-testid="terminal-highlight-enabled">{String(terminalHighlightPreferences.enabled)}</span>
       <span data-testid="terminal-highlight-custom-count">{terminalHighlightPreferences.customRules.length}</span>
       <button onClick={() => setTheme("system")} type="button">system</button>
       <button onClick={() => setTheme("light")} type="button">light</button>
       <button onClick={() => setTerminalFontSize(16)} type="button">font 16</button>
       <button onClick={() => setTerminalTheme("dracula")} type="button">theme dracula</button>
+      <button onClick={() => setFilesDefaultPathPreference({ mode: "custom", customPath: "srv/app" })} type="button">files custom path</button>
+      <button onClick={() => setTerminalDefaultPathPreference({ mode: "root", customPath: "/ignored" })} type="button">terminal root path</button>
       <button
         onClick={() =>
           setTerminalHighlightPreferences({
@@ -216,6 +224,36 @@ describe("PreferencesContext", () => {
 
     expect(screen.getByTestId("terminal-theme")).toHaveTextContent("dracula");
     expect(window.localStorage.getItem("online-ssh-terminal-theme")).toBe("dracula");
+  });
+
+  it("persists default remote path preferences", async () => {
+    window.localStorage.removeItem("online-ssh-files-default-path");
+    window.localStorage.removeItem("online-ssh-terminal-default-path");
+    installMatchMedia(false);
+    const user = userEvent.setup();
+
+    render(
+      <PreferencesProvider>
+        <ThemeProbe />
+      </PreferencesProvider>
+    );
+
+    expect(screen.getByTestId("files-default-path")).toHaveTextContent("home:");
+    expect(screen.getByTestId("terminal-default-path")).toHaveTextContent("home:");
+
+    await user.click(screen.getByRole("button", { name: "files custom path" }));
+    await user.click(screen.getByRole("button", { name: "terminal root path" }));
+
+    expect(screen.getByTestId("files-default-path")).toHaveTextContent("custom:/srv/app");
+    expect(screen.getByTestId("terminal-default-path")).toHaveTextContent("root:");
+    expect(JSON.parse(window.localStorage.getItem("online-ssh-files-default-path") || "{}")).toEqual({
+      mode: "custom",
+      customPath: "/srv/app"
+    });
+    expect(JSON.parse(window.localStorage.getItem("online-ssh-terminal-default-path") || "{}")).toEqual({
+      mode: "root",
+      customPath: ""
+    });
   });
 
   it("persists versioned terminal highlight preferences", async () => {

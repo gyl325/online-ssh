@@ -10,6 +10,8 @@ import { useFingerprintDialog } from "../features/fingerprint/FingerprintDialogC
 import { getHostMetrics, listHosts, testHost } from "../features/hosts/api";
 import { getHostDisplayName, getHostEndpoint, hostMatchesSearch, sortHostsByRecentActivity } from "../features/hosts/display";
 import type { Host } from "../features/hosts/types";
+import { defaultHomePath } from "../features/files/fileViewModel";
+import { defaultRemotePathCandidates } from "../features/preferences/defaultRemotePath";
 import { usePreferences } from "../features/preferences/PreferencesContext";
 import { createSavedCommand } from "../features/savedCommands/api";
 import type { SavedCommand } from "../features/savedCommands/types";
@@ -140,6 +142,7 @@ type TerminalTab = {
   rows: number;
   cols: number;
   initialDirectory?: string | null;
+  initialDirectoryFallbacks?: string[];
   attachAttempt: number;
   attached?: boolean | null;
   detachedAt?: string | null;
@@ -284,6 +287,7 @@ function terminalTabSameValue(left: TerminalTab, right: TerminalTab) {
     left.rows === right.rows &&
     left.cols === right.cols &&
     (left.initialDirectory || null) === (right.initialDirectory || null) &&
+    (left.initialDirectoryFallbacks || []).join("\n") === (right.initialDirectoryFallbacks || []).join("\n") &&
     left.attachAttempt === right.attachAttempt &&
     (left.attached ?? null) === (right.attached ?? null) &&
     (left.detachedAt || null) === (right.detachedAt || null) &&
@@ -305,6 +309,7 @@ function buildTerminalWebSocketUrl(
   rows: number,
   cols: number,
   initialDirectory?: string | null,
+  initialDirectoryFallbacks?: string[] | null,
   attachToken?: string | null
 ) {
   const params = new URLSearchParams({
@@ -315,6 +320,11 @@ function buildTerminalWebSocketUrl(
   if (initialDirectory) {
     params.set("cwd", initialDirectory);
   }
+  (initialDirectoryFallbacks || []).forEach((path) => {
+    if (path) {
+      params.append("cwd_fallback", path);
+    }
+  });
   if (attachToken) {
     params.set("attach_token", attachToken);
   }
@@ -479,7 +489,7 @@ export function TerminalPage({ hostCatalog, onHostConnected, quickConnectRequest
   const workspace = useWorkspaceSnapshot();
   const workspaceTerminalSnapshot = workspace.terminalSnapshot;
   const setWorkspaceTerminalSnapshot = workspace.setTerminalSnapshot;
-  const { language, t } = usePreferences();
+  const { language, t, terminalDefaultPathPreference } = usePreferences();
   const toast = useToast();
   const navigate = useNavigate();
   const location = useLocation();
@@ -1682,7 +1692,25 @@ export function TerminalPage({ hostCatalog, onHostConnected, quickConnectRequest
     });
   }, []);
 
-  const buildCreatingTab = (host: Host, initialDirectory?: string | null): TerminalTab => ({
+  const resolveInitialTerminalPaths = (host: Host, initialDirectory?: string | null) => {
+    if (initialDirectory) {
+      return { initialDirectory, initialDirectoryFallbacks: [] };
+    }
+    if (terminalDefaultPathPreference.mode === "home") {
+      return { initialDirectory: null, initialDirectoryFallbacks: [] };
+    }
+    const candidates = defaultRemotePathCandidates(terminalDefaultPathPreference, defaultHomePath(host));
+    return {
+      initialDirectory: candidates[0] || null,
+      initialDirectoryFallbacks: candidates.slice(1)
+    };
+  };
+
+  const buildCreatingTab = (
+    host: Host,
+    initialDirectory?: string | null,
+    initialDirectoryFallbacks: string[] = []
+  ): TerminalTab => ({
     id: createLocalTerminalTabId(host.id),
     hostId: host.id,
     hostLabel: host.name,
@@ -1695,6 +1723,7 @@ export function TerminalPage({ hostCatalog, onHostConnected, quickConnectRequest
     rows: terminalDefaults.rows,
     cols: terminalDefaults.cols,
     initialDirectory: initialDirectory || null,
+    initialDirectoryFallbacks,
     attachAttempt: 0,
     fingerprint: null,
     connectionLogs: initialConnectionLogs(host, t)
@@ -1704,7 +1733,8 @@ export function TerminalPage({ hostCatalog, onHostConnected, quickConnectRequest
     host: Host,
     response: CreateTerminalSessionResponse,
     tabId = response.session.id,
-    initialDirectory?: string | null
+    initialDirectory?: string | null,
+    initialDirectoryFallbacks: string[] = []
   ): TerminalTab => ({
     id: tabId,
     hostId: host.id,
@@ -1715,6 +1745,7 @@ export function TerminalPage({ hostCatalog, onHostConnected, quickConnectRequest
       terminalDefaults.rows,
       terminalDefaults.cols,
       initialDirectory,
+      initialDirectoryFallbacks,
       response.websocket.token
     ),
     protocol: response.websocket.protocol || terminalProtocol,
@@ -1724,6 +1755,7 @@ export function TerminalPage({ hostCatalog, onHostConnected, quickConnectRequest
     rows: terminalDefaults.rows,
     cols: terminalDefaults.cols,
     initialDirectory: initialDirectory || null,
+    initialDirectoryFallbacks,
     attachAttempt: 0,
     attached: response.session.attached,
     detachedAt: response.session.detached_at,
@@ -1752,6 +1784,7 @@ export function TerminalPage({ hostCatalog, onHostConnected, quickConnectRequest
       terminalDefaults.rows,
       terminalDefaults.cols,
       null,
+      null,
       response.websocket.token
     ),
     protocol: response.websocket.protocol || terminalProtocol,
@@ -1761,6 +1794,7 @@ export function TerminalPage({ hostCatalog, onHostConnected, quickConnectRequest
     rows: terminalDefaults.rows,
     cols: terminalDefaults.cols,
     initialDirectory: null,
+    initialDirectoryFallbacks: [],
     attachAttempt: 0,
     attached: response.session.attached,
     detachedAt: response.session.detached_at,
@@ -1801,7 +1835,7 @@ export function TerminalPage({ hostCatalog, onHostConnected, quickConnectRequest
         hosts.find((host) => host.id === session.host_id)?.name ||
         session.host_id,
       sessionId: session.id,
-      websocketUrl: attachable ? buildTerminalWebSocketUrl(session.id, rows, cols, null, session.attach_token) : "",
+      websocketUrl: attachable ? buildTerminalWebSocketUrl(session.id, rows, cols, null, null, session.attach_token) : "",
       protocol: attachable ? terminalProtocol : "",
       startedAt: session.started_at || snapshot?.started_at || new Date().toISOString(),
       status,
@@ -1813,6 +1847,7 @@ export function TerminalPage({ hostCatalog, onHostConnected, quickConnectRequest
       rows,
       cols,
       initialDirectory: null,
+      initialDirectoryFallbacks: [],
       attachAttempt: 0,
       attached: session.attached,
       detachedAt: session.detached_at,
@@ -1845,6 +1880,7 @@ export function TerminalPage({ hostCatalog, onHostConnected, quickConnectRequest
     rows: snapshot.rows || terminalDefaults.rows,
     cols: snapshot.cols || terminalDefaults.cols,
     initialDirectory: null,
+    initialDirectoryFallbacks: [],
     attachAttempt: 0,
     keepAliveUntil: snapshot.keep_alive_until,
     runtimeClosed: true,
@@ -1931,14 +1967,14 @@ export function TerminalPage({ hostCatalog, onHostConnected, quickConnectRequest
 
   const openTerminal = useCallback(async (host: Host, options?: { initialDirectory?: string | null }) => {
     setWorkspaceError(null);
-    const initialDirectory = options?.initialDirectory || null;
-    const pendingTab = buildCreatingTab(host, initialDirectory);
+    const { initialDirectory, initialDirectoryFallbacks } = resolveInitialTerminalPaths(host, options?.initialDirectory);
+    const pendingTab = buildCreatingTab(host, initialDirectory, initialDirectoryFallbacks);
     setTabs((current) => [...current, pendingTab]);
     setActiveTabId(pendingTab.id);
 
     try {
       const response = await bootstrapTerminal(host);
-      const tab = buildTab(host, response, response.session.id, initialDirectory);
+      const tab = buildTab(host, response, response.session.id, initialDirectory, initialDirectoryFallbacks);
       setTabs((current) =>
         current.map((item) => (item.id === pendingTab.id ? tab : item))
       );
@@ -1957,7 +1993,7 @@ export function TerminalPage({ hostCatalog, onHostConnected, quickConnectRequest
       });
       return null;
     }
-  }, [bootstrapTerminal, t, toast, updateTab]);
+  }, [bootstrapTerminal, t, terminalDefaultPathPreference, toast, updateTab]);
 
   const openQuickTerminal = useCallback(async (input: TemporaryConnectionInput) => {
     setWorkspaceError(null);
@@ -2052,7 +2088,7 @@ export function TerminalPage({ hostCatalog, onHostConnected, quickConnectRequest
               ...tab,
               status: "connecting",
               message,
-              websocketUrl: buildTerminalWebSocketUrl(tab.sessionId, tab.rows, tab.cols, null, tab.attachToken),
+              websocketUrl: buildTerminalWebSocketUrl(tab.sessionId, tab.rows, tab.cols, null, null, tab.attachToken),
               protocol: terminalProtocol,
               attachAttempt: tab.attachAttempt + 1,
               runtimeClosed: false
@@ -2160,7 +2196,13 @@ export function TerminalPage({ hostCatalog, onHostConnected, quickConnectRequest
 
     try {
       const response = await bootstrapTerminal(host);
-      const nextTab = buildTab(host, response, response.session.id, tab.initialDirectory);
+      const nextTab = buildTab(
+        host,
+        response,
+        response.session.id,
+        tab.initialDirectory,
+        tab.initialDirectoryFallbacks || []
+      );
       setTabs((current) => current.map((item) => (item.id === tab.id ? nextTab : item)));
       setActiveTabId(nextTab.id);
     } catch (error) {
