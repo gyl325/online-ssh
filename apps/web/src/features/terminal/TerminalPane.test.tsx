@@ -1,9 +1,9 @@
 import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import type { PropsWithChildren } from "react";
+import { useState, type PropsWithChildren } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-import { PreferencesProvider } from "../preferences/PreferencesContext";
+import { PreferencesProvider, usePreferences } from "../preferences/PreferencesContext";
 import { TerminalPane } from "./TerminalPane";
 import { authUnauthorizedEvent } from "../../shared/api/http";
 import stylesCss from "../../styles.css?raw";
@@ -45,6 +45,7 @@ vi.mock("xterm", () => ({
       loadAddon: vi.fn(),
       open: vi.fn(),
       writeln: vi.fn(),
+      refresh: vi.fn(),
       write: vi.fn((data: string, callback?: () => void) => {
         lines.set(0, data);
         activeBuffer.length = Math.max(activeBuffer.length, 1);
@@ -70,6 +71,7 @@ vi.mock("xterm", () => ({
       }),
       focus: vi.fn(),
       dispose: vi.fn(),
+      clearTextureAtlas: vi.fn(),
       registerMarker: vi.fn((offset = 0) => ({
         id: markerId++,
         line: activeBuffer.baseY + activeBuffer.cursorY + offset,
@@ -99,6 +101,11 @@ vi.mock("xterm", () => ({
       cols: 120,
       buffer: {
         active: activeBuffer
+      },
+      _core: {
+        _charSizeService: {
+          measure: vi.fn()
+        }
       },
       options
     };
@@ -180,6 +187,25 @@ function renderPane(onStateChange = vi.fn(), onOpenConnectionInfo?: () => void) 
   return onStateChange;
 }
 
+function FontSizeChangeHarness() {
+  const { setTerminalFontSize } = usePreferences();
+  const [active, setActive] = useState(false);
+
+  return (
+    <>
+      <button onClick={() => setTerminalFontSize(18)} type="button">Increase font size</button>
+      <button onClick={() => setActive(true)} type="button">Return to terminal</button>
+      <TerminalPane
+        active={active}
+        protocol="terminal.v1"
+        sessionId="session-1"
+        websocketUrl="ws://example.test/ws/terminal?session_id=session-1"
+        onStateChange={vi.fn()}
+      />
+    </>
+  );
+}
+
 describe("TerminalPane", () => {
   const originalWebSocket = globalThis.WebSocket;
 
@@ -232,6 +258,42 @@ describe("TerminalPane", () => {
 
     await waitFor(() => expect(terminalMocks.terminals).toHaveLength(1));
     expect(terminalMocks.terminals[0].options.fontSize).toBe(16);
+  });
+
+  it("refreshes existing terminal layout after a font-size change when returning to the terminal", async () => {
+    const user = userEvent.setup();
+
+    render(<FontSizeChangeHarness />, { wrapper: Wrapper });
+
+    await waitFor(() => expect(terminalMocks.terminals).toHaveLength(1));
+    const surface = document.querySelector(".terminal-surface") as HTMLElement;
+    Object.defineProperty(surface, "offsetWidth", { configurable: true, value: 720 });
+    Object.defineProperty(surface, "offsetHeight", { configurable: true, value: 360 });
+    Object.defineProperty(surface, "clientWidth", { configurable: true, value: 720 });
+    Object.defineProperty(surface, "clientHeight", { configurable: true, value: 360 });
+
+    const terminal = terminalMocks.terminals[0];
+    const fitAddon = terminalMocks.fitAddons[0];
+    terminal.refresh.mockClear();
+    fitAddon.fit.mockClear();
+    terminal._core._charSizeService.measure.mockClear();
+    terminal.clearTextureAtlas.mockClear();
+
+    await user.click(screen.getByRole("button", { name: "Increase font size" }));
+
+    await waitFor(() => expect(terminal.options.fontSize).toBe(18));
+    expect(terminal.refresh).not.toHaveBeenCalled();
+
+    await user.click(screen.getByRole("button", { name: "Return to terminal" }));
+
+    await waitFor(() => expect(terminal._core._charSizeService.measure).toHaveBeenCalled());
+    await waitFor(() => expect(fitAddon.fit).toHaveBeenCalled());
+    await waitFor(() => expect(terminal.refresh).toHaveBeenCalledWith(0, terminal.rows - 1));
+    expect(terminal.clearTextureAtlas).toHaveBeenCalled();
+    expect(terminal._core._charSizeService.measure.mock.invocationCallOrder[0]).toBeLessThan(
+      fitAddon.fit.mock.invocationCallOrder[0]
+    );
+    expect(terminalMocks.terminals).toHaveLength(1);
   });
 
   it("uses the selected ecosystem terminal theme from user preferences", async () => {

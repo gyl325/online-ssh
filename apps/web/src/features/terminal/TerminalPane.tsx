@@ -76,6 +76,20 @@ function writeSystemLine(terminalRef: MutableRefObject<Terminal | null>, text: s
   terminalRef.current?.writeln(`\r\n[system] ${text}`);
 }
 
+function remeasureTerminalFontMetrics(terminal: Terminal) {
+  // xterm keeps the previous cell metrics when a font-size change is measured while hidden.
+  const core = (terminal as unknown as {
+    _core?: {
+      _charSizeService?: {
+        measure?: () => void;
+      };
+    };
+  })._core;
+
+  core?._charSizeService?.measure?.();
+  terminal.clearTextureAtlas();
+}
+
 function normalizeTerminalSize(rows: number, cols: number) {
   return {
     rows: Math.max(5, Math.min(200, rows)),
@@ -112,6 +126,8 @@ export function TerminalPane({
   const resizeObserverRef = useRef<ResizeObserver | null>(null);
   const pingTimerRef = useRef<number | null>(null);
   const resizeFrameRef = useRef<number | null>(null);
+  const fontLayoutRefreshFrameRef = useRef<number | null>(null);
+  const pendingFontLayoutRefreshRef = useRef(false);
   const disposedRef = useRef(false);
   const resizeSuspendedRef = useRef(resizeSuspended);
   const terminalExitHandledRef = useRef(false);
@@ -230,6 +246,42 @@ export function TerminalPane({
     });
   });
 
+  const scheduleTerminalLayoutRefresh = useEffectEvent(() => {
+    pendingFontLayoutRefreshRef.current = true;
+    if (!active || disposedRef.current || resizeSuspendedRef.current) {
+      return;
+    }
+
+    if (fontLayoutRefreshFrameRef.current) {
+      window.cancelAnimationFrame(fontLayoutRefreshFrameRef.current);
+      fontLayoutRefreshFrameRef.current = null;
+    }
+
+    const terminal = terminalRef.current;
+    if (!terminal || !canResize(containerRef.current)) {
+      return;
+    }
+
+    remeasureTerminalFontMetrics(terminal);
+    queueResize(true);
+    fontLayoutRefreshFrameRef.current = window.requestAnimationFrame(() => {
+      fontLayoutRefreshFrameRef.current = window.requestAnimationFrame(() => {
+        fontLayoutRefreshFrameRef.current = null;
+        if (disposedRef.current) {
+          return;
+        }
+
+        const terminal = terminalRef.current;
+        if (!canResize(containerRef.current) || !terminal || terminal.rows <= 0) {
+          return;
+        }
+
+        pendingFontLayoutRefreshRef.current = false;
+        terminal.refresh(0, terminal.rows - 1);
+      });
+    });
+  });
+
   useLayoutEffect(() => {
     const wasSuspended = resizeSuspendedRef.current;
     if (!wasSuspended && resizeSuspended) {
@@ -244,9 +296,13 @@ export function TerminalPane({
     resizeSuspendedRef.current = resizeSuspended;
     if (wasSuspended && !resizeSuspended && active) {
       setFrozenSurfaceSize(null);
-      queueResize(true);
+      if (pendingFontLayoutRefreshRef.current) {
+        scheduleTerminalLayoutRefresh();
+      } else {
+        queueResize(true);
+      }
     }
-  }, [active, queueResize, resizeSuspended]);
+  }, [active, queueResize, resizeSuspended, scheduleTerminalLayoutRefresh]);
 
   const handleControlEvent = useEffectEvent((event: TerminalControlEvent) => {
     switch (event.type) {
@@ -419,6 +475,11 @@ export function TerminalPane({
     });
 
     resizeObserverRef.current = new ResizeObserver(() => {
+      if (pendingFontLayoutRefreshRef.current) {
+        scheduleTerminalLayoutRefresh();
+        return;
+      }
+
       if (!hasMeasuredRef.current) {
         return;
       }
@@ -460,6 +521,11 @@ export function TerminalPane({
         resizeFrameRef.current = null;
       }
 
+      if (fontLayoutRefreshFrameRef.current) {
+        window.cancelAnimationFrame(fontLayoutRefreshFrameRef.current);
+        fontLayoutRefreshFrameRef.current = null;
+      }
+
       wsRef.current?.close();
       wsRef.current = null;
       highlightManagerRef.current?.dispose();
@@ -481,11 +547,13 @@ export function TerminalPane({
   }, [activeTerminalTheme]);
 
   useLayoutEffect(() => {
-    if (terminalRef.current) {
-      terminalRef.current.options.fontSize = terminalFontSize;
-      queueResize(true);
+    const terminal = terminalRef.current;
+    if (terminal) {
+      terminal.options.fontSize = terminalFontSize;
+      lastContainerSizeRef.current = null;
+      scheduleTerminalLayoutRefresh();
     }
-  }, [queueResize, terminalFontSize]);
+  }, [scheduleTerminalLayoutRefresh, terminalFontSize]);
 
   useEffect(() => {
     if (!active) {
@@ -493,7 +561,11 @@ export function TerminalPane({
     }
 
     const frame = window.requestAnimationFrame(() => {
-      queueResize(true);
+      if (pendingFontLayoutRefreshRef.current) {
+        scheduleTerminalLayoutRefresh();
+      } else {
+        queueResize(true);
+      }
       terminalRef.current?.focus();
     });
 

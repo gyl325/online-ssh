@@ -1514,8 +1514,8 @@ export function HostsPage({ onHostDeleted, onHostSaved, visible = true }: HostsP
                       {displayedLoginRecords.map((record, index) => (
                         <div className="host-login-record" key={`${record.user}-${record.terminal}-${record.fullTime}-${index}`}>
                           <div className="host-login-record-main">
-                            <strong>{record.user}</strong>
-                            <span>{record.source}</span>
+                            <strong title={record.user}>{record.user}</strong>
+                            <span title={record.source}>{record.source}</span>
                           </div>
                           <span>{record.terminal}</span>
                           <time title={record.fullTime}>{record.loginTime}</time>
