@@ -1,0 +1,2 @@
+ALTER TABLE saved_commands
+ADD COLUMN IF NOT EXISTS category VARCHAR(80) NULL;

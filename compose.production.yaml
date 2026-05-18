@@ -1,0 +1,37 @@
+services:
+  postgres:
+    image: postgres:15
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-online_ssh}
+      POSTGRES_USER: ${POSTGRES_USER:-online_ssh}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD}
+    volumes:
+      - ${POSTGRES_DATA_DIR:-./data/postgres}:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+
+  app:
+    image: ${ONLINE_SSH_IMAGE:?set ONLINE_SSH_IMAGE}
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      APP_ENV: production
+      HTTP_ADDR: :8080
+      AUTO_MIGRATE: "true"
+      MIGRATIONS_DIR: /app/migrations
+      STATIC_DIR: /app/web
+      DATABASE_URL: ${DATABASE_URL:-postgres://${POSTGRES_USER:-online_ssh}:${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-online_ssh}?sslmode=disable}
+      CREDENTIAL_MASTER_KEY: ${CREDENTIAL_MASTER_KEY:?set CREDENTIAL_MASTER_KEY}
+      BOOTSTRAP_SETUP_TOKEN: ${BOOTSTRAP_SETUP_TOKEN:?set BOOTSTRAP_SETUP_TOKEN}
+      ALLOW_USER_REGISTRATION: ${ALLOW_USER_REGISTRATION:-false}
+      SESSION_COOKIE_SECURE: ${SESSION_COOKIE_SECURE:-true}
+      SESSION_COOKIE_NAME: ${SESSION_COOKIE_NAME:-online_ssh_session}
+      REFRESH_COOKIE_NAME: ${REFRESH_COOKIE_NAME:-online_ssh_refresh}
+    ports:
+      - "${ONLINE_SSH_BIND_HOST:-0.0.0.0}:${ONLINE_SSH_HTTP_PORT:-8080}:8080"

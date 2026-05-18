@@ -1,0 +1,382 @@
+stages:
+  - test
+  - build
+  - deploy
+  - smoke
+
+variables:
+  GOPROXY: "https://proxy.golang.org,direct"
+  GOSUMDB: "sum.golang.org"
+  IMAGE_REGISTRY: ""
+  IMAGE_NAMESPACE: "library"
+  IMAGE_NAME: "online-ssh"
+
+frontend_tests:
+  stage: test
+  image: node:24-bookworm
+  cache:
+    key: npm-${CI_COMMIT_REF_SLUG}
+    paths:
+      - apps/web/.npm-cache/
+  script:
+    - cd apps/web
+    - npm ci --cache .npm-cache
+    - npm run test
+    - npm run build
+
+backend_tests:
+  stage: test
+  image: golang:1.23-bookworm
+  cache:
+    key: go-${CI_COMMIT_REF_SLUG}
+    paths:
+      - .go-cache/
+      - .go-mod-cache/
+  script:
+    - export GOCACHE="$CI_PROJECT_DIR/.go-cache"
+    - export GOMODCACHE="$CI_PROJECT_DIR/.go-mod-cache"
+    - cd backend-skeleton/server
+    - go test ./...
+
+backend_db_integration_tests:
+  stage: test
+  image: golang:1.23-bookworm
+  rules:
+    - if: '$DATABASE_URL_TEST'
+  cache:
+    key: go-${CI_COMMIT_REF_SLUG}
+    paths:
+      - .go-cache/
+      - .go-mod-cache/
+  script:
+    - export GOCACHE="$CI_PROJECT_DIR/.go-cache"
+    - export GOMODCACHE="$CI_PROJECT_DIR/.go-mod-cache"
+    - cd backend-skeleton/server
+    - ONLINE_SSH_RUN_DB_TESTS=1 go test ./internal/auth ./internal/admin ./internal/audit ./internal/auditexport ./internal/migration ./internal/connection ./internal/credential ./internal/files ./internal/host ./internal/hostgroup ./internal/transfer ./internal/savedcommand ./internal/terminal -count=1
+
+docker_image:
+  stage: build
+  image: docker:27
+  services:
+    - name: docker:27-dind
+      alias: docker
+  variables:
+    DOCKER_HOST: "tcp://docker:2375"
+    DOCKER_TLS_CERTDIR: ""
+  rules:
+    - if: '$CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH'
+  script:
+    - |
+      set -eu
+
+      export IMAGE_REGISTRY="${IMAGE_REGISTRY:-${ONLINE_SSH_REGISTRY:-${CI_REGISTRY:-}}}"
+      export IMAGE_NAMESPACE="${IMAGE_NAMESPACE:-library}"
+      export IMAGE_NAME="${IMAGE_NAME:-online-ssh}"
+      export ONLINE_SSH_IMAGE_PUSH="${ONLINE_SSH_IMAGE_PUSH:-1}"
+      export ONLINE_SSH_IMAGE_REPOSITORY="${ONLINE_SSH_IMAGE_REPOSITORY:-}"
+      if [ -z "${ONLINE_SSH_IMAGE_REPOSITORY:-}" ] && [ -n "${IMAGE_REGISTRY:-}" ]; then
+        export ONLINE_SSH_IMAGE_REPOSITORY="$IMAGE_REGISTRY/$IMAGE_NAMESPACE/$IMAGE_NAME"
+      fi
+      if [ -z "${ONLINE_SSH_IMAGE_REPOSITORY:-}" ]; then
+        if [ "$ONLINE_SSH_IMAGE_PUSH" = "0" ]; then
+          export ONLINE_SSH_IMAGE_REPOSITORY="$IMAGE_NAME"
+        else
+          echo "No Docker image repository is configured. Set IMAGE_REGISTRY/IMAGE_NAMESPACE/IMAGE_NAME or ONLINE_SSH_IMAGE_REPOSITORY."
+          exit 1
+        fi
+      fi
+
+      export ONLINE_SSH_IMAGE="$ONLINE_SSH_IMAGE_REPOSITORY:$CI_COMMIT_SHA"
+      export ONLINE_SSH_REGISTRY="${ONLINE_SSH_REGISTRY:-${IMAGE_REGISTRY:-${CI_REGISTRY:-}}}"
+      export ONLINE_SSH_NODE_IMAGE="${ONLINE_SSH_NODE_IMAGE:-node:24-bookworm}"
+      export ONLINE_SSH_GO_IMAGE="${ONLINE_SSH_GO_IMAGE:-golang:1.23-bookworm}"
+      export ONLINE_SSH_RUNTIME_IMAGE="${ONLINE_SSH_RUNTIME_IMAGE:-scratch}"
+
+      if [ "$ONLINE_SSH_IMAGE_PUSH" = "1" ]; then
+        test -n "${ONLINE_SSH_REGISTRY:-}" || { echo "Set ONLINE_SSH_REGISTRY or IMAGE_REGISTRY for the Docker registry login host."; exit 1; }
+        if [ -n "${ONLINE_SSH_REGISTRY_USER:-}" ] || [ -n "${ONLINE_SSH_REGISTRY_PASSWORD:-}" ]; then
+          test -n "${ONLINE_SSH_REGISTRY_USER:-}" || { echo "ONLINE_SSH_REGISTRY_USER is set as the registry credential source, but ONLINE_SSH_REGISTRY_PASSWORD is missing."; exit 1; }
+          test -n "${ONLINE_SSH_REGISTRY_PASSWORD:-}" || { echo "ONLINE_SSH_REGISTRY_PASSWORD is set as the registry credential source, but ONLINE_SSH_REGISTRY_USER is missing."; exit 1; }
+          export ONLINE_SSH_REGISTRY_CREDENTIAL_SOURCE="ONLINE_SSH_REGISTRY_*"
+        elif [ -n "${CI_REGISTRY_USER:-}" ] && [ -n "${CI_REGISTRY_PASSWORD:-}" ] && [ "${ONLINE_SSH_REGISTRY:-}" = "${CI_REGISTRY:-}" ]; then
+          export ONLINE_SSH_REGISTRY_USER="$CI_REGISTRY_USER"
+          export ONLINE_SSH_REGISTRY_PASSWORD="$CI_REGISTRY_PASSWORD"
+          export ONLINE_SSH_REGISTRY_CREDENTIAL_SOURCE="CI_REGISTRY_*"
+        else
+          echo "Set registry credentials with ONLINE_SSH_REGISTRY_USER/ONLINE_SSH_REGISTRY_PASSWORD or use the GitLab built-in registry variables."
+          exit 1
+        fi
+        test -n "${ONLINE_SSH_REGISTRY_USER:-}" || { echo "Registry username was not resolved."; exit 1; }
+        test -n "${ONLINE_SSH_REGISTRY_PASSWORD:-}" || { echo "Registry password was not resolved."; exit 1; }
+        echo "Using registry credentials from $ONLINE_SSH_REGISTRY_CREDENTIAL_SOURCE for $ONLINE_SSH_REGISTRY."
+      else
+        echo "ONLINE_SSH_IMAGE_PUSH=0. The job will build $ONLINE_SSH_IMAGE and skip registry push."
+      fi
+
+      echo "Building Docker image $ONLINE_SSH_IMAGE"
+    - docker build --build-arg GOPROXY="${GOPROXY:-https://proxy.golang.org,direct}" --build-arg NODE_IMAGE="$ONLINE_SSH_NODE_IMAGE" --build-arg GO_IMAGE="$ONLINE_SSH_GO_IMAGE" --build-arg RUNTIME_IMAGE="$ONLINE_SSH_RUNTIME_IMAGE" -t "$ONLINE_SSH_IMAGE" .
+    - |
+      if [ "$ONLINE_SSH_IMAGE_PUSH" = "1" ]; then
+        printf '%s\n' "$ONLINE_SSH_REGISTRY_PASSWORD" | docker login "$ONLINE_SSH_REGISTRY" -u "$ONLINE_SSH_REGISTRY_USER" --password-stdin
+        docker push "$ONLINE_SSH_IMAGE"
+      fi
+    - |
+      if [ "$ONLINE_SSH_IMAGE_PUSH" = "1" ] && [ "$CI_COMMIT_BRANCH" = "$CI_DEFAULT_BRANCH" ]; then
+        docker tag "$ONLINE_SSH_IMAGE" "$ONLINE_SSH_IMAGE_REPOSITORY:latest"
+        docker push "$ONLINE_SSH_IMAGE_REPOSITORY:latest"
+      fi
+
+deploy_docker_production:
+  stage: deploy
+  image: alpine:3.20
+  needs:
+    - job: docker_image
+  rules:
+    - if: '$CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH'
+      when: manual
+      allow_failure: true
+  before_script:
+    - apk add --no-cache openssh-client-default
+    - mkdir -p ~/.ssh
+    - chmod 700 ~/.ssh
+    - |
+      test -n "${DEPLOY_SSH_PRIVATE_KEY:-}" || { echo "Set DEPLOY_SSH_PRIVATE_KEY to a private key that can SSH to DEPLOY_SSH_TARGET."; exit 1; }
+      if [ -f "$DEPLOY_SSH_PRIVATE_KEY" ]; then
+        tr -d '\r' < "$DEPLOY_SSH_PRIVATE_KEY" > ~/.ssh/id_ed25519
+      else
+        printf '%s\n' "$DEPLOY_SSH_PRIVATE_KEY" | tr -d '\r' > ~/.ssh/id_ed25519
+      fi
+      chmod 600 ~/.ssh/id_ed25519
+    - test -n "${DEPLOY_SSH_KNOWN_HOSTS:-}"
+    - printf '%s\n' "$DEPLOY_SSH_KNOWN_HOSTS" > ~/.ssh/known_hosts
+    - chmod 600 ~/.ssh/known_hosts
+  script:
+    - test -n "${DEPLOY_SSH_TARGET:-}"
+    - export DEPLOY_DOCKER_DIR="${DEPLOY_DOCKER_DIR:-/opt/online-ssh-docker}"
+    - export DEPLOY_SSH_PORT="${DEPLOY_SSH_PORT:-22}"
+    - |
+      set -eu
+
+      if [ -n "${ONLINE_SSH_HTTP_PORT:-}" ] && [ "$DEPLOY_SSH_PORT" = "$ONLINE_SSH_HTTP_PORT" ]; then
+        echo "DEPLOY_SSH_PORT is set to $DEPLOY_SSH_PORT, which matches ONLINE_SSH_HTTP_PORT."
+        echo "DEPLOY_SSH_PORT must be the SSH port for DEPLOY_SSH_TARGET, usually 22."
+        echo "The web app port belongs in the deployment .env as ONLINE_SSH_HTTP_PORT."
+        exit 1
+      fi
+
+      export IMAGE_REGISTRY="${IMAGE_REGISTRY:-${ONLINE_SSH_REGISTRY:-${CI_REGISTRY:-}}}"
+      export IMAGE_NAMESPACE="${IMAGE_NAMESPACE:-library}"
+      export IMAGE_NAME="${IMAGE_NAME:-online-ssh}"
+      export ONLINE_SSH_IMAGE_REPOSITORY="${ONLINE_SSH_IMAGE_REPOSITORY:-}"
+      if [ -z "${ONLINE_SSH_IMAGE_REPOSITORY:-}" ] && [ -n "${IMAGE_REGISTRY:-}" ]; then
+        export ONLINE_SSH_IMAGE_REPOSITORY="$IMAGE_REGISTRY/$IMAGE_NAMESPACE/$IMAGE_NAME"
+      fi
+      if [ -z "${ONLINE_SSH_IMAGE_REPOSITORY:-}" ]; then
+        if [ -n "${CI_REGISTRY_IMAGE:-}" ]; then
+          export ONLINE_SSH_IMAGE_REPOSITORY="$CI_REGISTRY_IMAGE"
+        elif [ -n "${CI_REGISTRY:-}" ] && [ -n "${CI_PROJECT_PATH:-}" ]; then
+          export ONLINE_SSH_IMAGE_REPOSITORY="$CI_REGISTRY/$CI_PROJECT_PATH"
+        fi
+      fi
+      test -n "${ONLINE_SSH_IMAGE_REPOSITORY:-}" || { echo "No Docker image repository is configured. Set IMAGE_REGISTRY/IMAGE_NAMESPACE/IMAGE_NAME or ONLINE_SSH_IMAGE_REPOSITORY."; exit 1; }
+
+      export ONLINE_SSH_IMAGE="$ONLINE_SSH_IMAGE_REPOSITORY:$CI_COMMIT_SHA"
+
+      echo "Deploying Docker image $ONLINE_SSH_IMAGE to $DEPLOY_SSH_TARGET:$DEPLOY_SSH_PORT."
+    - ssh -p "$DEPLOY_SSH_PORT" "$DEPLOY_SSH_TARGET" "cd '$DEPLOY_DOCKER_DIR' && ONLINE_SSH_IMAGE='$ONLINE_SSH_IMAGE' docker compose -f compose.production.yaml pull && ONLINE_SSH_IMAGE='$ONLINE_SSH_IMAGE' docker compose -f compose.production.yaml up -d"
+
+deploy_direct_remote:
+  stage: deploy
+  image: docker:27
+  services:
+    - name: docker:27-dind
+      alias: docker
+  needs:
+    - job: docker_image
+  variables:
+    DOCKER_HOST: "tcp://docker:2375"
+    DOCKER_TLS_CERTDIR: ""
+  rules:
+    - if: '$CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH'
+      when: manual
+      allow_failure: true
+  before_script:
+    - apk add --no-cache openssh-client-default
+    - mkdir -p ~/.ssh
+    - chmod 700 ~/.ssh
+    - |
+      test -n "${DIRECT_DEPLOY_SSH_PRIVATE_KEY:-}" || { echo "Set DIRECT_DEPLOY_SSH_PRIVATE_KEY to a private key that can SSH to DIRECT_DEPLOY_SSH_TARGET."; exit 1; }
+      if [ -f "$DIRECT_DEPLOY_SSH_PRIVATE_KEY" ]; then
+        tr -d '\r' < "$DIRECT_DEPLOY_SSH_PRIVATE_KEY" > ~/.ssh/id_ed25519
+      else
+        printf '%s\n' "$DIRECT_DEPLOY_SSH_PRIVATE_KEY" | tr -d '\r' > ~/.ssh/id_ed25519
+      fi
+      chmod 600 ~/.ssh/id_ed25519
+    - test -n "${DIRECT_DEPLOY_SSH_KNOWN_HOSTS:-}"
+    - printf '%s\n' "$DIRECT_DEPLOY_SSH_KNOWN_HOSTS" > ~/.ssh/known_hosts
+    - chmod 600 ~/.ssh/known_hosts
+  script:
+    - test -n "${DIRECT_DEPLOY_SSH_TARGET:-}"
+    - export DIRECT_DEPLOY_SSH_PORT="${DIRECT_DEPLOY_SSH_PORT:-22}"
+    - export DIRECT_DEPLOY_DIR="${DIRECT_DEPLOY_DIR:-/opt/online-ssh}"
+    - export DIRECT_DEPLOY_HTTP_ADDR="${DIRECT_DEPLOY_HTTP_ADDR:-127.0.0.1:8080}"
+    - |
+      set -eu
+
+      export IMAGE_REGISTRY="${IMAGE_REGISTRY:-${ONLINE_SSH_REGISTRY:-${CI_REGISTRY:-}}}"
+      export IMAGE_NAMESPACE="${IMAGE_NAMESPACE:-library}"
+      export IMAGE_NAME="${IMAGE_NAME:-online-ssh}"
+      export ONLINE_SSH_IMAGE_REPOSITORY="${ONLINE_SSH_IMAGE_REPOSITORY:-}"
+      if [ -z "${ONLINE_SSH_IMAGE_REPOSITORY:-}" ] && [ -n "${IMAGE_REGISTRY:-}" ]; then
+        export ONLINE_SSH_IMAGE_REPOSITORY="$IMAGE_REGISTRY/$IMAGE_NAMESPACE/$IMAGE_NAME"
+      fi
+      if [ -z "${ONLINE_SSH_IMAGE_REPOSITORY:-}" ]; then
+        if [ -n "${CI_REGISTRY_IMAGE:-}" ]; then
+          export ONLINE_SSH_IMAGE_REPOSITORY="$CI_REGISTRY_IMAGE"
+        elif [ -n "${CI_REGISTRY:-}" ] && [ -n "${CI_PROJECT_PATH:-}" ]; then
+          export ONLINE_SSH_IMAGE_REPOSITORY="$CI_REGISTRY/$CI_PROJECT_PATH"
+        fi
+      fi
+      test -n "${ONLINE_SSH_IMAGE_REPOSITORY:-}" || { echo "No Docker image repository is configured. Set IMAGE_REGISTRY/IMAGE_NAMESPACE/IMAGE_NAME or ONLINE_SSH_IMAGE_REPOSITORY."; exit 1; }
+
+      export ONLINE_SSH_IMAGE="$ONLINE_SSH_IMAGE_REPOSITORY:$CI_COMMIT_SHA"
+      export ONLINE_SSH_REGISTRY="${ONLINE_SSH_REGISTRY:-${IMAGE_REGISTRY:-${CI_REGISTRY:-}}}"
+
+      if [ -n "${ONLINE_SSH_REGISTRY_USER:-}" ] || [ -n "${ONLINE_SSH_REGISTRY_PASSWORD:-}" ]; then
+        test -n "${ONLINE_SSH_REGISTRY_USER:-}" || { echo "ONLINE_SSH_REGISTRY_USER is set as the registry credential source, but ONLINE_SSH_REGISTRY_PASSWORD is missing."; exit 1; }
+        test -n "${ONLINE_SSH_REGISTRY_PASSWORD:-}" || { echo "ONLINE_SSH_REGISTRY_PASSWORD is set as the registry credential source, but ONLINE_SSH_REGISTRY_USER is missing."; exit 1; }
+        export ONLINE_SSH_REGISTRY_CREDENTIAL_SOURCE="ONLINE_SSH_REGISTRY_*"
+      elif [ -n "${CI_REGISTRY_USER:-}" ] && [ -n "${CI_REGISTRY_PASSWORD:-}" ] && [ "${ONLINE_SSH_REGISTRY:-}" = "${CI_REGISTRY:-}" ]; then
+        export ONLINE_SSH_REGISTRY_USER="$CI_REGISTRY_USER"
+        export ONLINE_SSH_REGISTRY_PASSWORD="$CI_REGISTRY_PASSWORD"
+        export ONLINE_SSH_REGISTRY_CREDENTIAL_SOURCE="CI_REGISTRY_*"
+      else
+        echo "Set registry credentials with ONLINE_SSH_REGISTRY_USER/ONLINE_SSH_REGISTRY_PASSWORD or use the GitLab built-in registry variables."
+        exit 1
+      fi
+
+      test -n "${ONLINE_SSH_REGISTRY:-}" || { echo "Set ONLINE_SSH_REGISTRY for the Docker registry login host."; exit 1; }
+      test -n "${ONLINE_SSH_REGISTRY_USER:-}" || { echo "Registry username was not resolved."; exit 1; }
+      test -n "${ONLINE_SSH_REGISTRY_PASSWORD:-}" || { echo "Registry password was not resolved."; exit 1; }
+
+      echo "Extracting direct-deploy artifact from $ONLINE_SSH_IMAGE."
+      printf '%s\n' "$ONLINE_SSH_REGISTRY_PASSWORD" | docker login "$ONLINE_SSH_REGISTRY" -u "$ONLINE_SSH_REGISTRY_USER" --password-stdin
+      docker pull "$ONLINE_SSH_IMAGE"
+
+      ARTIFACT_DIR="$CI_PROJECT_DIR/.direct-deploy-artifact"
+      RELEASE_TAR="$CI_PROJECT_DIR/direct-deploy-release.tgz"
+      rm -rf "$ARTIFACT_DIR" "$RELEASE_TAR"
+      mkdir -p "$ARTIFACT_DIR/backend" "$ARTIFACT_DIR/web" "$ARTIFACT_DIR/migrations"
+      CONTAINER_ID="$(docker create "$ONLINE_SSH_IMAGE")"
+      trap 'docker rm -f "$CONTAINER_ID" >/dev/null 2>&1 || true; rm -rf "$ARTIFACT_DIR" "$RELEASE_TAR"' EXIT
+      docker cp "$CONTAINER_ID:/app/online-ssh-server" "$ARTIFACT_DIR/backend/online-ssh-server"
+      docker cp "$CONTAINER_ID:/app/web/." "$ARTIFACT_DIR/web/"
+      docker cp "$CONTAINER_ID:/app/migrations/." "$ARTIFACT_DIR/migrations/"
+      chmod 755 "$ARTIFACT_DIR/backend/online-ssh-server"
+      tar -C "$ARTIFACT_DIR" -czf "$RELEASE_TAR" backend web migrations
+
+      REMOTE_TMP_DIR="$DIRECT_DEPLOY_DIR/tmp/$CI_PIPELINE_ID"
+      ssh -p "$DIRECT_DEPLOY_SSH_PORT" "$DIRECT_DEPLOY_SSH_TARGET" "mkdir -p '$REMOTE_TMP_DIR'"
+      scp -P "$DIRECT_DEPLOY_SSH_PORT" "$RELEASE_TAR" "$DIRECT_DEPLOY_SSH_TARGET:$REMOTE_TMP_DIR/release.tgz"
+      echo "Deploying direct runtime to $DIRECT_DEPLOY_SSH_TARGET:$DIRECT_DEPLOY_DIR."
+    - |
+      ssh -p "$DIRECT_DEPLOY_SSH_PORT" "$DIRECT_DEPLOY_SSH_TARGET" \
+        "DIRECT_DEPLOY_DIR='$DIRECT_DEPLOY_DIR' DIRECT_DEPLOY_HTTP_ADDR='$DIRECT_DEPLOY_HTTP_ADDR' CI_PIPELINE_ID='$CI_PIPELINE_ID' sh -s" <<'REMOTE_SCRIPT'
+      set -eu
+
+      BACKEND_DIR="$DIRECT_DEPLOY_DIR/backend"
+      WEB_DIR="$DIRECT_DEPLOY_DIR/web"
+      LOG_DIR="$DIRECT_DEPLOY_DIR/logs"
+      RUN_DIR="$DIRECT_DEPLOY_DIR/run"
+      TMP_DIR="$DIRECT_DEPLOY_DIR/tmp/$CI_PIPELINE_ID"
+      PID_FILE="$RUN_DIR/online-ssh.pid"
+      LOG_FILE="$LOG_DIR/backend.log"
+
+      stop_pid() {
+        pid="$1"
+        [ -z "$pid" ] && return 0
+        kill -0 "$pid" 2>/dev/null || return 0
+
+        echo "Stopping backend process $pid"
+        kill "$pid" 2>/dev/null || true
+        i=0
+        while kill -0 "$pid" 2>/dev/null && [ "$i" -lt 15 ]; do
+          sleep 1
+          i=$((i + 1))
+        done
+        if kill -0 "$pid" 2>/dev/null; then
+          echo "Backend process $pid did not stop, killing forcefully"
+          kill -9 "$pid" 2>/dev/null || true
+        fi
+      }
+
+      mkdir -p "$BACKEND_DIR" "$WEB_DIR" "$LOG_DIR" "$RUN_DIR"
+      test -f "$BACKEND_DIR/.env.local" || { echo "Missing $BACKEND_DIR/.env.local on direct deploy server."; exit 1; }
+
+      rm -rf "$TMP_DIR/extracted"
+      mkdir -p "$TMP_DIR/extracted"
+      tar -xzf "$TMP_DIR/release.tgz" -C "$TMP_DIR/extracted"
+
+      if [ -f "$PID_FILE" ]; then
+        old_pid="$(cat "$PID_FILE" || true)"
+        case "$old_pid" in
+          ''|*[!0-9]*) ;;
+          *) stop_pid "$old_pid" ;;
+        esac
+      fi
+
+      if command -v pgrep >/dev/null 2>&1; then
+        old_pids="$(pgrep -f "$BACKEND_DIR/online-ssh-server" || true)"
+        for old_pid in $old_pids; do
+          [ "$old_pid" != "$$" ] && stop_pid "$old_pid"
+        done
+      fi
+
+      install -m 755 "$TMP_DIR/extracted/backend/online-ssh-server" "$BACKEND_DIR/online-ssh-server"
+      rm -rf "$BACKEND_DIR/migrations"
+      mkdir -p "$BACKEND_DIR/migrations"
+      cp -R "$TMP_DIR/extracted/migrations/." "$BACKEND_DIR/migrations/"
+
+      find "$WEB_DIR" -mindepth 1 -maxdepth 1 -exec rm -rf {} +
+      cp -R "$TMP_DIR/extracted/web/." "$WEB_DIR/"
+
+      echo "Starting direct backend on $DIRECT_DEPLOY_HTTP_ADDR"
+      cd "$BACKEND_DIR"
+      APP_ENV=production \
+        HTTP_ADDR="$DIRECT_DEPLOY_HTTP_ADDR" \
+        STATIC_DIR="$WEB_DIR" \
+        MIGRATIONS_DIR="$BACKEND_DIR/migrations" \
+        AUTO_MIGRATE=true \
+        nohup "$BACKEND_DIR/online-ssh-server" > "$LOG_FILE" 2>&1 &
+      new_pid="$!"
+      echo "$new_pid" > "$PID_FILE"
+      sleep 2
+
+      if ! kill -0 "$new_pid" 2>/dev/null; then
+        echo "Backend failed to start. Last logs:"
+        tail -n 120 "$LOG_FILE" || true
+        exit 1
+      fi
+
+      rm -rf "$TMP_DIR"
+      echo "Direct deployment completed. Backend pid: $new_pid"
+      REMOTE_SCRIPT
+
+ssh_sftp_smoke_tests:
+  stage: smoke
+  image: golang:1.23-bookworm
+  rules:
+    - if: '$ONLINE_SSH_RUN_SMOKE_TESTS == "1"'
+      when: manual
+    - when: never
+  allow_failure: true
+  cache:
+    key: go-${CI_COMMIT_REF_SLUG}
+    paths:
+      - .go-cache/
+      - .go-mod-cache/
+  script:
+    - export GOCACHE="$CI_PROJECT_DIR/.go-cache"
+    - export GOMODCACHE="$CI_PROJECT_DIR/.go-mod-cache"
+    - cd backend-skeleton/server
+    - go run ./cmd/smoke
