@@ -169,10 +169,15 @@ export function TerminalPane({
 
   const sendJson = useEffectEvent((payload: unknown) => {
     if (disposedRef.current || wsRef.current?.readyState !== WebSocket.OPEN) {
-      return;
+      return false;
     }
 
-    wsRef.current.send(JSON.stringify(payload));
+    try {
+      wsRef.current.send(JSON.stringify(payload));
+      return true;
+    } catch {
+      return false;
+    }
   });
 
   const queueResize = useEffectEvent((force = false) => {
@@ -236,13 +241,16 @@ export function TerminalPane({
         return;
       }
 
-      lastSentSizeRef.current = normalized;
-
-      sendJson({
+      const sent = sendJson({
         type: "resize",
         rows: normalized.rows,
         cols: normalized.cols
       });
+      if (!sent) {
+        return;
+      }
+
+      lastSentSizeRef.current = normalized;
     });
   });
 

@@ -70,6 +70,43 @@ describe("terminal keyword highlighting", () => {
     ]);
   });
 
+  it("does not match built-in status keywords inside ordinary words", () => {
+    const { rules, issues } = buildTerminalHighlightRules(defaultTerminalHighlightPreferences);
+
+    const matches = scanTerminalLine("System information as of today. MicroK8s is installed.", rules);
+
+    expect(issues).toEqual([]);
+    expect(matches.map((match) => match.ruleId)).not.toContain("info");
+    expect(matches.map((match) => match.ruleId)).not.toContain("ok");
+  });
+
+  it("requires keyword matches to be independent tokens", () => {
+    const { rules, issues } = buildTerminalHighlightRules(preferences([
+      customRule({
+        id: "short-tokens",
+        name: "Short tokens",
+        pattern: "ok\nid\nls"
+      }),
+      customRule({
+        id: "host-token",
+        name: "Host token",
+        pattern: "host"
+      })
+    ]));
+
+    const falsePositiveLine = "MicroK8s localhost ~/.ssh/authorized_keys/id_ed25519 ls-files";
+    expect(issues).toEqual([]);
+    expect(scanTerminalLine(falsePositiveLine, rules)).toEqual([]);
+
+    const tokenLine = "[ok] host id ls";
+    expect(scanTerminalLine(tokenLine, rules).map((match) => [match.ruleId, tokenLine.slice(match.start, match.end)])).toEqual([
+      ["short-tokens", "ok"],
+      ["host-token", "host"],
+      ["short-tokens", "id"],
+      ["short-tokens", "ls"]
+    ]);
+  });
+
   it("matches regex rules including built-in IP address patterns", () => {
     const { rules, issues } = buildTerminalHighlightRules({
       ...defaultTerminalHighlightPreferences,

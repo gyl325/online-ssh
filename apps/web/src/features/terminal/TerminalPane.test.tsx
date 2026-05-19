@@ -130,9 +130,10 @@ class MockWebSocket extends EventTarget {
   static CLOSING = 2;
   static CLOSED = 3;
   static instances: MockWebSocket[] = [];
+  static initialReadyState = MockWebSocket.OPEN;
 
   binaryType = "";
-  readyState = MockWebSocket.OPEN;
+  readyState = MockWebSocket.initialReadyState;
   send = vi.fn();
 
   constructor(
@@ -146,6 +147,11 @@ class MockWebSocket extends EventTarget {
   close() {
     this.readyState = MockWebSocket.CLOSED;
     this.dispatchEvent(new Event("close"));
+  }
+
+  open() {
+    this.readyState = MockWebSocket.OPEN;
+    this.dispatchEvent(new Event("open"));
   }
 
   emitControlEvent(payload: unknown) {
@@ -214,6 +220,7 @@ describe("TerminalPane", () => {
     terminalMocks.terminals.length = 0;
     terminalMocks.fitAddons.length = 0;
     MockWebSocket.instances.length = 0;
+    MockWebSocket.initialReadyState = MockWebSocket.OPEN;
     vi.stubGlobal("WebSocket", MockWebSocket);
     vi.stubGlobal(
       "ResizeObserver",
@@ -629,6 +636,52 @@ describe("TerminalPane", () => {
       expect(MockWebSocket.instances[0].send).toHaveBeenCalledWith(expect.stringContaining("\"type\":\"resize\""))
     );
     expect(MockWebSocket.instances[0].send).toHaveBeenCalledWith(expect.stringContaining("\"cols\":42"));
+  });
+
+  it("sends the fitted size after websocket open even when it was measured while connecting", async () => {
+    MockWebSocket.initialReadyState = MockWebSocket.CONNECTING;
+
+    const view = render(
+      <TerminalPane
+        active={false}
+        protocol="terminal.v1"
+        sessionId="session-1"
+        websocketUrl="ws://example.test/ws/terminal?session_id=session-1"
+        onStateChange={vi.fn()}
+      />,
+      { wrapper: Wrapper }
+    );
+
+    await waitFor(() => expect(MockWebSocket.instances).toHaveLength(1));
+    const surface = document.querySelector(".terminal-surface") as HTMLElement;
+    Object.defineProperty(surface, "offsetWidth", { configurable: true, value: 320 });
+    Object.defineProperty(surface, "offsetHeight", { configurable: true, value: 300 });
+    Object.defineProperty(surface, "clientWidth", { configurable: true, value: 320 });
+    Object.defineProperty(surface, "clientHeight", { configurable: true, value: 300 });
+    const terminal = terminalMocks.terminals[0];
+    terminal.rows = 20;
+    terminal.cols = 42;
+
+    view.rerender(
+      <TerminalPane
+        active
+        protocol="terminal.v1"
+        sessionId="session-1"
+        websocketUrl="ws://example.test/ws/terminal?session_id=session-1"
+        onStateChange={vi.fn()}
+      />
+    );
+
+    await waitFor(() => expect(terminalMocks.fitAddons[0].fit).toHaveBeenCalled());
+    expect(MockWebSocket.instances[0].send).not.toHaveBeenCalled();
+
+    MockWebSocket.instances[0].open();
+
+    await waitFor(() =>
+      expect(MockWebSocket.instances[0].send).toHaveBeenCalledWith(expect.stringContaining("\"type\":\"resize\""))
+    );
+    expect(MockWebSocket.instances[0].send).toHaveBeenCalledWith(expect.stringContaining("\"cols\":42"));
+    expect(MockWebSocket.instances[0].send).toHaveBeenCalledWith(expect.stringContaining("\"rows\":20"));
   });
 
   it("keeps pane header status chips on one line in narrow columns", () => {

@@ -378,19 +378,34 @@ function collectKeywordMatches(line: string, rule: CompiledTerminalHighlightRule
     const matches: TerminalHighlightMatch[] = [];
     let index = source.indexOf(needle);
     while (index >= 0) {
-      matches.push({
-        ruleId: rule.id,
-        name: rule.name,
-        start: index,
-        end: index + needle.length,
-        foregroundColor: rule.foregroundColor,
-        backgroundColor: rule.backgroundColor,
-        priority: rule.priority
-      });
+      const end = index + needle.length;
+      if (isIndependentKeywordToken(line, keyword, index, end)) {
+        matches.push({
+          ruleId: rule.id,
+          name: rule.name,
+          start: index,
+          end,
+          foregroundColor: rule.foregroundColor,
+          backgroundColor: rule.backgroundColor,
+          priority: rule.priority
+        });
+      }
       index = source.indexOf(needle, index + Math.max(needle.length, 1));
     }
     return matches;
   });
+}
+
+function isAsciiTokenCharacter(value: string) {
+  return /^[A-Za-z0-9_-]$/.test(value);
+}
+
+function isIndependentKeywordToken(line: string, keyword: string, start: number, end: number) {
+  const first = keyword[0] || "";
+  const last = keyword[keyword.length - 1] || "";
+  const hasLeftBoundary = start <= 0 || !isAsciiTokenCharacter(first) || !isAsciiTokenCharacter(line[start - 1] || "");
+  const hasRightBoundary = end >= line.length || !isAsciiTokenCharacter(last) || !isAsciiTokenCharacter(line[end] || "");
+  return hasLeftBoundary && hasRightBoundary;
 }
 
 function collectRegexMatches(line: string, rule: CompiledTerminalHighlightRule): TerminalHighlightMatch[] {
